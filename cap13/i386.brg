@@ -1,0 +1,225 @@
+%{
+/*
+ * reserva de registos greedy sem spilling.
+ * call não faz save do 'eax' porque são sempre instruções e não expressões.
+ * idiv spills and moves registers
+ * (only IMUL r/m32  is EDX:EAX := EAX * r/m dword; all others truncate)
+ */
+#include <stdio.h>
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+#include "node.h"
+#include "tabid.h"
+
+static const char *name[] = { "eax", "ecx", "edx", "ebx", "esi", "edi", "no-reg" };
+static const char *small[] = { "al", "cl", "dl", "bl", "al", "al", "no-reg" };
+static int busy[7];
+static int getReg();
+
+extern int lbl;
+extern char *mklbl(int n);
+
+static void setcond(Node *p, char *cond) {
+  PLACE(p)=PLACE(LEFT_CHILD(p));
+  printf(" cmp %s, %s\n mov %s, dword 0\n set%s %s\n", name[PLACE(p)],
+	  name[PLACE(RIGHT_CHILD(p))], name[PLACE(p)], cond, small[PLACE(p)]);
+  busy[PLACE(RIGHT_CHILD(p))]=0;
+}
+
+static void jcond(Node *p, char *cond) {
+  printf(" cmp %s, %s\n %s %s\n",
+	  name[PLACE(p->value.sub.n[0]->value.sub.n[0])],
+	  name[PLACE(p->value.sub.n[0]->value.sub.n[1])],
+	  cond, p->value.sub.n[1]->value.s);
+  busy[PLACE(p->value.sub.n[0]->value.sub.n[0])] = 0;
+  busy[PLACE(p->value.sub.n[0]->value.sub.n[1])] = 0;
+}
+
+/* IMUL r32,r/m32 ; IMUL r32,imm32 ; IMUL r32,r/m32,imm32 (r32 = r_m32 * imm32) */
+static void binop(char *op, Node *p) {
+  printf(" %s %s, %s\n", op, name[PLACE(p)=PLACE(LEFT_CHILD(p))],
+			  name[PLACE(RIGHT_CHILD(p))]);
+  busy[PLACE(RIGHT_CHILD(p))]=0;
+}
+
+static void idiv(int op, Node *p) {
+  int spilleax = 0, spillecx = 0, spilledx = 0;
+  /* idiv r/m32 (uses edx:eax + r/m32 and gives quo=eax rem=edx) */
+  if (PLACE(LEFT_CHILD(p)) != 0) { /* dividend not in 'eax' */
+    if (PLACE(RIGHT_CHILD(p)) == 0) {
+      printf(" xchg eax, %s\n", name[PLACE(p)=PLACE(LEFT_CHILD(p))]);
+      PLACE(RIGHT_CHILD(p)) = PLACE(LEFT_CHILD(p));
+      PLACE(LEFT_CHILD(p)) = 0;
+    }
+    else {
+      if (busy[0]) { /* 'eax' is busy */
+	spilleax = 1;
+	printf(" push eax ; spill\n");
+      }
+      printf(" mov eax, %s\n", name[PLACE(LEFT_CHILD(p))]);
+    }
+  }
+  if (PLACE(RIGHT_CHILD(p)) == 2) { /* divisor in 'edx', move it out */
+    int r = getReg();
+    if (r < 6) { /* move to a free reg */
+      busy[PLACE(RIGHT_CHILD(p))]=0;
+      PLACE(RIGHT_CHILD(p)) = r;
+      printf(" mov %s, edx\n", name[PLACE(RIGHT_CHILD(p))]);
+    } else { /* spill ecx (or any other) and move divisor to it */
+      spillecx = 1;
+      printf(" push ecx ; spill\n mov ecx, %s\n", name[PLACE(RIGHT_CHILD(p))]);
+      busy[PLACE(RIGHT_CHILD(p))]=0;
+      PLACE(RIGHT_CHILD(p)) = 2;
+    }
+  } else
+    if (busy[2]) { /* 'edx' is busy */
+      spilledx = 1;
+      printf(" push edx ; spill\n");
+    }
+  printf(" cdq\n idiv %s\n", name[PLACE(RIGHT_CHILD(p))]);
+  busy[PLACE(LEFT_CHILD(p))]=0;
+  busy[PLACE(RIGHT_CHILD(p))]=0;
+  PLACE(p) = getReg();
+  printf(" mov %s, %s\n", name[PLACE(p)], op == 0 ? "eax" : "edx");
+  if (spillecx) printf(" pop ecx ; unspill\n");
+  if (spilledx) printf(" pop edx ; unspill\n");
+  if (spilleax) printf(" pop eax ; unspill\n");
+}
+%}
+%term LIST=';' ASSIGN='=' ADD='+' SUB='-' MUL='*' DIV='/' MOD='%' LT='<' GT='>'
+%include "y.tab.h"
+%%
+stat:  LIST(stat,stat)
+stat:  STRING 1 { char *l = mklbl(++lbl); printf(" segment .rodata\n align 4\n%s: db '%s', 10, 0\n segment .text\n push dword $%s\n call _prints\n add esp,4\n", l, p->value.s, l); }
+stat:  PRINT(reg) 1 { printf(" push dword %s\n call _printi\n call _println\n add esp, 4\n", name[PLACE(p)=PLACE(LEFT_CHILD(p))]); busy[PLACE(LEFT_CHILD(p))]=0; }
+stat:  READ 1 { printf(" call _readi\n mov [%s], eax\n", p->value.s); }
+stat:  JZ(reg,ETIQ) 1 {
+		printf(" jz %s, %s\n", name[PLACE(p)=PLACE(LEFT_CHILD(p))],
+			p->value.sub.n[1]->value.s);
+                busy[PLACE(LEFT_CHILD(p))]=0; /* liberta registo filho 1 */ }
+stat:  JNZ(reg,ETIQ) 1 {
+		printf(" jnz %s, %s\n", name[PLACE(p)=PLACE(LEFT_CHILD(p))],
+			p->value.sub.n[1]->value.s);
+                busy[PLACE(LEFT_CHILD(p))]=0; /* liberta registo filho 1 */ }
+stat:  JMP 1 { printf(" jmp %s\n", p->value.s); }
+stat:  LABEL { printf("%s:\n", p->value.s); }
+stat:  ASSIGN(VARIABLE,reg)   19 {
+                printf(" mov [%s], %s\n", p->value.sub.n[0]->value.s, name[PLACE(RIGHT_CHILD(p))]);
+                busy[PLACE(RIGHT_CHILD(p))]=0; /* liberta registo filho 1 */ }
+stat:  ASSIGN(VARIABLE,INTEGER) 20 {
+		printf(" mov [%s], dword %d\n", p->value.sub.n[0]->value.s, p->value.sub.n[1]->value.i); }
+stat:   JZ(LT(reg,reg), ETIQ)    2 { jcond(p, "jge"); }
+stat:   JZ(LE(reg,reg), ETIQ)    2 { jcond(p, "jg"); }
+stat:   JZ(GT(reg,reg), ETIQ)    2 { jcond(p, "jle"); }
+stat:   JZ(GE(reg,reg), ETIQ)    2 { jcond(p, "jl"); }
+stat:   JZ(EQ(reg,reg), ETIQ)    2 { jcond(p, "jne"); }
+stat:   JZ(NE(reg,reg), ETIQ)    2 { jcond(p, "jeq"); }
+stat:   JNZ(LT(reg,reg), ETIQ)    2 { jcond(p, "jl"); }
+stat:   JNZ(LE(reg,reg), ETIQ)    2 { jcond(p, "jle"); }
+stat:   JNZ(GT(reg,reg), ETIQ)    2 { jcond(p, "jg"); }
+stat:   JNZ(GE(reg,reg), ETIQ)    2 { jcond(p, "jge"); }
+stat:   JNZ(EQ(reg,reg), ETIQ)    2 { jcond(p, "jeq"); }
+stat:   JNZ(NE(reg,reg), ETIQ)    2 { jcond(p, "jne"); }
+
+stat:  reg { busy[PLACE(p)] = 0; /* free reg */ }
+reg:   mem 18 { printf(" mov %s, mem\n", name[PLACE(p) = getReg()]); }
+reg:   VARIABLE 18 { printf(" mov %s, [%s]\n", name[PLACE(p) = getReg()], p->value.s); }
+reg:   INTEGER 4 { printf(" mov %s, %d\n", name[PLACE(p) = getReg()], p->value.i); }
+reg:   ADD(reg,reg)     3 { binop("add", p); }
+reg:   ADD(reg,INTEGER)   4 {
+                printf(" add %s, %d\n", name[PLACE(p)=PLACE(LEFT_CHILD(p))], RIGHT_CHILD(p)->value.i); }
+reg:   ADD(reg,mem)     19 {
+                printf(" add %s, mem\n", name[PLACE(p)=PLACE(LEFT_CHILD(p))]); }
+reg:   SUB(reg,reg)    3 { binop("sub", p); }
+reg:   SUB(reg,INTEGER)  4 {
+                printf(" sub %s, const\n", name[PLACE(p)=PLACE(LEFT_CHILD(p))]); }
+reg:   SUB(reg,mem)    19 {
+                printf(" sub %s, mem\n", name[PLACE(p)=PLACE(LEFT_CHILD(p))]); }
+reg:   UMINUS(reg)       3 {
+                printf(" neg %s\n", name[PLACE(p)=PLACE(LEFT_CHILD(p))]); }
+
+reg:   MUL(reg,reg)   3 { binop("imul", p); }
+reg:   DIV(reg,reg)   3 { idiv(0, p); }
+reg:   MOD(reg,reg)   3 { idiv(1, p); }
+reg:   EQ(reg,reg)    3 { setcond(p, "e"); }
+reg:   NE(reg,reg)    3 { setcond(p, "ne"); }
+reg:   LT(reg,reg)    3 { setcond(p, "l"); }
+reg:   LE(reg,reg)    3 { setcond(p, "le"); }
+reg:   GE(reg,reg)    3 { setcond(p, "ge"); }
+reg:   GT(reg,reg)    3 { setcond(p, "g"); }
+mem:   reg               19 {
+                printf(" mov mem, %s\n", name[PLACE(LEFT_CHILD(p))]);
+                busy[PLACE(LEFT_CHILD(p))]=0; /* liberta registo filho 1 */ }
+mem:   INTEGER             20 { printf(" mov mem, %d\n", p->value.i); }
+mem:   ADD(mem,reg)     30 {
+                printf(" add mem, %s\n", name[PLACE(RIGHT_CHILD(p))]);
+                busy[PLACE(RIGHT_CHILD(p))]=0; /* liberta registo filho 1 */ }
+mem:   ADD(mem,INTEGER)   31 { printf(" add mem, const\n"); }
+mem:   SUB(mem,reg)    30 {
+                printf(" sub mem, %s\n", name[PLACE(RIGHT_CHILD(p))]);
+                busy[PLACE(RIGHT_CHILD(p))]=0; /* liberta registo filho 1 */ }
+mem:   SUB(mem,INTEGER)  31 { printf(" sub mem, const\n"); }
+mem:   UMINUS(mem)       30 { printf(" neg mem\n"); }
+
+stat:  ASSIGN(VARIABLE,ADD(VARIABLE,INTEGER))   1 {
+		if (strcmp(LEFT_CHILD(p)->value.s, LEFT_CHILD(RIGHT_CHILD(p))->value.s) == 0)
+			printf(" add [%s], dword %d ; incr\n", LEFT_CHILD(p)->value.s, RIGHT_CHILD(RIGHT_CHILD(p))->value.i);
+		else {
+			int r = getReg();
+			printf(" mov %s, [%s]\n", name[r], LEFT_CHILD(RIGHT_CHILD(p))->value.s);
+			printf(" add %s, %d\n", name[r], RIGHT_CHILD(RIGHT_CHILD(p))->value.i);
+			printf(" mov [%s], %s\n", LEFT_CHILD(p)->value.s, name[r]);
+			busy[r] = 0;
+		}
+	  }
+stat:   JZ(EQ(reg,INTEGER), ETIQ)    2 {
+  printf(" cmp %s, %d\n jne %s\n", name[PLACE(LEFT_CHILD(p)->value.sub.n[0])],
+	  LEFT_CHILD(p)->value.sub.n[1]->value.i, RIGHT_CHILD(p)->value.s);
+  busy[PLACE(LEFT_CHILD(p)->value.sub.n[0])] = 0;
+}
+stat:   JZ(GT(reg,INTEGER), ETIQ)    2 {
+  printf(" cmp %s, %d\n jle %s\n", name[PLACE(LEFT_CHILD(p)->value.sub.n[0])],
+	  LEFT_CHILD(p)->value.sub.n[1]->value.i, RIGHT_CHILD(p)->value.s);
+  busy[PLACE(LEFT_CHILD(p)->value.sub.n[0])] = 0;
+}
+%%
+
+static int getReg()
+{
+  unsigned int i;
+
+  for(i = 0; i < sizeof(busy); i++)
+    if (busy[i] == 0) {
+      busy[i] = 1;
+      return i;
+    }
+  fprintf(stderr,"Registos esgotados\n");
+  return sizeof(busy) + 1;
+}
+
+#include "y.tab.h"
+
+extern char **yynames;
+
+static int data(int t, char *s, int a, int user) {
+  if (s) printf(" %s dd 0\n", s);
+  return 1;
+}
+
+void evaluate(Node *p) {
+  extern int trace, errors;
+
+  if (errors) return;
+  if (trace) printNode(p, stdout, yynames);
+#ifdef _WIN32
+  printf(" segment .text\n align 4\n global _main\n_main:\n");
+#else
+  printf(" segment .text\n align 4\n global _main:function\n_main:\n");
+#endif
+  yyselect(p);
+  printf(" mov eax, 0\n ret\n");
+  printf(" segment .data\n");
+  IDevery(data,0);
+  printf(" extern _prints\n extern _printi\n extern _println\n extern _readi\n");
+}

@@ -1,0 +1,20 @@
+program	# imprime os divisores de um número
+  n = 0;
+  d = 0;
+  print 'Cálculo dos divisores de um número.';
+  print 'Introduza o número: ';
+  read n;
+  if (n > 0) {
+    i = 2;
+    while (i <= n/2) {
+      if (n % i == 0) {
+	print i;	# "n" é divisível por "i"
+	d = d + 1;
+      }
+      i = i + 1;
+    }
+    if (d == 0) {
+      print 'é primo';		# "n" é primo
+    }
+  }
+end

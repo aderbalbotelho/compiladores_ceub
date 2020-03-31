@@ -1,0 +1,49 @@
+// package simples;
+
+import java_cup.runtime.Symbol;
+
+// %unicode
+// %ignorecase
+// %notunix // newline is \r\n
+%%
+%class lexer
+%cup
+%full // 8bits characters
+%line // yyline for counting input lines
+%% 
+"#".*			{ ; /* comment */ }
+"{"			{ return new Symbol(sym.LBR); }
+"}"			{ return new Symbol(sym.RBR); }
+"("			{ return new Symbol(sym.LPR); }
+")"			{ return new Symbol(sym.RPR); }
+";"			{ return new Symbol(sym.SEP); }
+"="			{ return new Symbol(sym.ASSIGN); }
+"+"			{ return new Symbol(sym.ADD); }
+"-"			{ return new Symbol(sym.SUB); }
+"*"			{ return new Symbol(sym.MUL); }
+"/"			{ return new Symbol(sym.DIV); }
+"%"			{ return new Symbol(sym.MOD); }
+">"			{ return new Symbol(sym.GT); }
+"<"			{ return new Symbol(sym.LT); }
+">="			{ return new Symbol(sym.GE); }
+"<="			{ return new Symbol(sym.LE); }
+"=="			{ return new Symbol(sym.EQ); }
+"!="			{ return new Symbol(sym.NE); }
+"while"			{ return new Symbol(sym.WHILE); }
+"if"			{ return new Symbol(sym.IF); }
+"else"			{ return new Symbol(sym.ELSE); }
+"print"			{ return new Symbol(sym.PRINT); }
+"read"			{ return new Symbol(sym.READ); }
+"program"		{ return new Symbol(sym.PROGRAM); }
+"end"			{ return new Symbol(sym.END); }
+
+[A-Za-z][A-Za-z0-9_]*	{ // parse.yylval = new NodeVariable(yytext());
+			  return new Symbol(sym.VARIABLE, new String(yytext())); } 
+\'[^']*\'		{ // parse.yylval = new NodeString;
+			  return new Symbol(sym.STRING, new String(yytext().substring(1, yytext().length()-1))); }
+[0-9]+			{ // parse.yylval = new NodeInteger(Integer.parseInt(yytext()));
+			  return new Symbol(sym.INTEGER, new Integer(yytext())); } 
+ 
+[ \t\n]+		{ ; /* ignore whitespace */ }
+ 
+. 			{ System.err.println("Illegal character: "+yytext()); }

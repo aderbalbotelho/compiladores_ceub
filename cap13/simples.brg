@@ -1,0 +1,91 @@
+%{
+/*
+ * selecção de instruções com via
+ */
+#include <stdio.h>
+#include <assert.h>
+#include <stdlib.h>
+#include <string.h>
+#include "node.h"
+#include "tabid.h"
+#include "via.h"
+
+static int sameVar(NODEPTR_TYPE p) {
+  return strcmp(LEFT_CHILD(p)->value.s, LEFT_CHILD(RIGHT_CHILD(p))->value.s) ? 0x7fff : 2;
+}
+
+extern FILE *outfp;
+extern int lbl;
+extern char *mklbl(int n);
+%}
+%term LIST=';' ASSIGN='=' ADD='+' SUB='-' MUL='*' DIV='/' MOD='%' LT='<' GT='>'
+%include "y.tab.h"
+%%
+stat:	LIST(stat,stat)
+stat:	STRING		9 { char *l = mklbl(++lbl);
+			    fprintf(outfp, viaRODATA viaALIGN viaLABEL viaSTR
+				viaTEXT viaADDR viaCALL viaCALL viaTRASH,
+				l, p->value.s, l, "_prints", "_println", 4); }
+stat:	PRINT(reg)	3 { fprintf(outfp, viaCALL viaCALL viaTRASH,
+				"_printi", "_println", 4); }
+stat:	READ		1 { fprintf(outfp, viaCALL viaPUSH viaADDRA, "_readi", p->value.s); }
+stat:	JZ(reg,ETIQ)	1 { fprintf(outfp, viaJZ, p->SUB(1)->value.s); }
+stat:	JNZ(reg,ETIQ)	1 { fprintf(outfp, viaJNZ, p->SUB(1)->value.s); }
+stat:	JMP		1 { fprintf(outfp, viaJMP, p->value.s); }
+stat:	LABEL		  { fprintf(outfp, viaLABEL, p->value.s); }
+stat:	ASSIGN(VARIABLE,reg)   1 {
+		fprintf(outfp, viaADDRA, p->SUB(0)->value.s); }
+stat:	JZ(LT(reg,reg), ETIQ)	1 { fprintf(outfp, viaJGE, p->SUB(1)->value.s); }
+stat:	JZ(LE(reg,reg), ETIQ)	1 { fprintf(outfp, viaJGT, p->SUB(1)->value.s); }
+stat:	JZ(GT(reg,reg), ETIQ)	1 { fprintf(outfp, viaJLE, p->SUB(1)->value.s); }
+stat:	JZ(GE(reg,reg), ETIQ)	1 { fprintf(outfp, viaJLT, p->SUB(1)->value.s); }
+stat:	JZ(EQ(reg,reg), ETIQ)	1 { fprintf(outfp, viaJNE, p->SUB(1)->value.s); }
+stat:	JZ(NE(reg,reg), ETIQ)	1 { fprintf(outfp, viaJEQ, p->SUB(1)->value.s); }
+stat:	JNZ(LT(reg,reg), ETIQ)	1 { fprintf(outfp, viaJLT, p->SUB(1)->value.s); }
+stat:	JNZ(LE(reg,reg), ETIQ)	1 { fprintf(outfp, viaJLE, p->SUB(1)->value.s); }
+stat:	JNZ(GT(reg,reg), ETIQ)	1 { fprintf(outfp, viaJGT, p->SUB(1)->value.s); }
+stat:	JNZ(GE(reg,reg), ETIQ)	1 { fprintf(outfp, viaJGE, p->SUB(1)->value.s); }
+stat:	JNZ(EQ(reg,reg), ETIQ)	1 { fprintf(outfp, viaJEQ, p->SUB(1)->value.s); }
+stat:	JNZ(NE(reg,reg), ETIQ)	1 { fprintf(outfp, viaJNE, p->SUB(1)->value.s); }
+
+stat:	reg 1 { fprintf(outfp, viaTRASH, 4); }
+reg:	VARIABLE 1 { fprintf(outfp, viaADDRV, p->value.s); }
+reg:	INTEGER 1 { fprintf(outfp, viaIMM, p->value.i); }
+reg:	ADD(reg,reg)	1 { fprintf(outfp, viaADD); }
+reg:	SUB(reg,reg)	1 { fprintf(outfp, viaSUB); }
+reg:	UMINUS(reg)	1 { fprintf(outfp, viaNEG); } 
+reg:	MUL(reg,reg)	1 { fprintf(outfp, viaMUL); }
+reg:	DIV(reg,reg)	1 { fprintf(outfp, viaDIV); }
+reg:	MOD(reg,reg)	1 { fprintf(outfp, viaMOD); }
+reg:	EQ(reg,reg)	1 { fprintf(outfp, viaEQ); }
+reg:	NE(reg,reg)	1 { fprintf(outfp, viaNE); }
+reg:	LT(reg,reg)	1 { fprintf(outfp, viaLT); }
+reg:	LE(reg,reg)	1 { fprintf(outfp, viaLE); }
+reg:	GE(reg,reg)	1 { fprintf(outfp, viaGE); }
+reg:	GT(reg,reg)	1 { fprintf(outfp, viaGT); }
+
+stat:	ASSIGN(VARIABLE,ADD(VARIABLE,INTEGER))	sameVar {
+		fprintf(outfp, viaADDR viaINCR, LEFT_CHILD(p)->value.s, RIGHT_CHILD(RIGHT_CHILD(p))->value.i);
+	}
+%%
+#include "y.tab.h"
+
+extern char **yynames;
+
+static int data(int t, char *s, int a, int user) {
+  if (s) fprintf(outfp, viaLABEL viaINTEGER, s, 0);
+  return 1;
+}
+
+void evaluate(Node *p) {
+  extern int trace, errors;
+
+  if (errors) return;
+  if (trace) printNode(p, stdout, yynames);
+  fprintf(outfp, viaTEXT viaALIGN viaGLOBL viaLABEL, "_main", viaFUNC, "_main");
+  yyselect(p);
+  fprintf(outfp, viaRET viaDATA);
+  IDevery(data,0);
+  fprintf(outfp, viaEXTRN viaEXTRN viaEXTRN viaEXTRN,
+  		"_prints", "_printi", "_println", "_readi");
+}

@@ -1,0 +1,75 @@
+// package simples;
+
+import java_cup.runtime.*;
+
+parser code {:
+	Node tree; // top level node of the syntax tree
+	private int nerr;
+	public  Node syntax() { return tree; }
+	public void report_error(String message, Object info) {
+	  super.report_error(message, info);
+	  nerr++;
+	}
+	public int errors() { return nerr; }
+
+	public static void main(String args[]) throws Exception {
+		if (args.length==0) new parser(new lexer(System.in)).parse();
+		else new parser(new lexer(new java.io.FileInputStream(args[0]))).parse();
+	}
+:}
+
+terminal Integer INTEGER;
+terminal String VARIABLE, STRING;
+terminal WHILE, IF, PRINT, READ, PROGRAM, END, ELSE;
+
+terminal GE, LE, EQ, NE;
+terminal GT, LT, ADD, SUB, MUL, DIV, MOD;
+terminal UMINUS, IFX;
+terminal SEP, ASSIGN, LBR, RBR, LPR, RPR;
+
+non terminal program;
+non terminal Node stmt, list, expr;
+
+precedence nonassoc IFX;
+precedence nonassoc ELSE;
+
+precedence left GE, LE, EQ, NE, GT, LT;
+precedence left ADD, SUB;
+precedence left MUL, DIV, MOD;
+precedence nonassoc UMINUS;
+
+program	::= PROGRAM list:l END		  {: parser.tree = l; :}
+	;
+
+stmt	::= SEP				  	{: RESULT = new Node(); :}
+	| PRINT STRING:s SEP		  	{: RESULT = new NodeString(s); :}
+	| PRINT expr:e SEP		  	{: RESULT = new NodePrint(e); :}
+	| READ VARIABLE:v SEP		  	{: RESULT = new NodeRead(new NodeVariable(v)); :}
+	| VARIABLE:v ASSIGN expr:e SEP	  	{: RESULT = new NodeAssign(new NodeVariable(v), e); :}
+	| WHILE LPR expr:e RPR stmt:s	  	{: RESULT = new NodeWhile(e, s); :}
+	| IF LPR expr:e RPR stmt:s 		{: RESULT = new NodeIf(e, s); :} %prec IFX
+	| IF LPR expr:e RPR stmt:s ELSE stmt:o  {: RESULT = new NodeIfelse(e, s, o); :}
+	| LBR list:l RBR			{: RESULT = l; :}
+	;
+
+list	::= stmt:s		{: NodeList n = new NodeList(); n.append(s); RESULT = n; :}
+	| list:l stmt:s		{: ((NodeList)l).append(s); RESULT = l; :}
+	;
+
+expr	::= INTEGER:v		{: RESULT = new NodeInteger(v); :}
+	| VARIABLE:v		{: RESULT = new NodeVariable(v); :}
+	| SUB expr:e		{: RESULT = new NodeUminus(e); :} %prec UMINUS
+	| expr:e ADD expr:v	{: RESULT = new NodeAdd(e, v); :}
+	| expr:e SUB expr:v	{: RESULT = new NodeSub(e, v); :}
+	| expr:e MUL expr:v	{: RESULT = new NodeMul(e, v); :}
+	| expr:e DIV expr:v	{: RESULT = new NodeDiv(e, v); :}
+	| expr:e MOD expr:v	{: RESULT = new NodeMod(e, v); :}
+	| expr:e LT expr:v	{: RESULT = new NodeLt(e, v); :}
+	| expr:e GT expr:v	{: RESULT = new NodeGt(e, v); :}
+	| expr:e GE expr:v	{: RESULT = new NodeGe(e, v); :}
+	| expr:e LE expr:v	{: RESULT = new NodeLe(e, v); :}
+	| expr:e NE expr:v	{: RESULT = new NodeNe(e, v); :}
+	| expr:e EQ expr:v	{: RESULT = new NodeEq(e, v); :}
+	| LPR expr:e RPR	{: RESULT = e; :}
+	;
+
